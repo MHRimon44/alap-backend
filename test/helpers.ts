@@ -4,6 +4,11 @@ import type { ApiConfig } from '../src/config/env.js';
 
 export function createTestConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
   return Object.freeze({
+    firebase: {
+      projectId: 'test-project',
+      clientEmail: 'test@example.com',
+      privateKey: 'test-only',
+    },
     adminEmails: Object.freeze([]),
     registrationOtpEnabled: false,
     passwordResetEnabled: false,

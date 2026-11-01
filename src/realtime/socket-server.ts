@@ -1,3 +1,4 @@
+import { startRealtimeOutbox } from './outbox.js';
 import type { Server as HttpServer } from 'node:http';
 
 import { createAdapter } from '@socket.io/redis-adapter';
@@ -52,6 +53,7 @@ export async function createRealtimeServer(input: {
   auth: AuthService;
   messages: MessageService;
   logger: Logger;
+  enableOutbox?: boolean;
   enableRedisAdapter?: boolean;
   loadConversationIds?: (userId: string) => Promise<readonly string[]>;
   loadParticipantIds?: (conversationId: string) => Promise<readonly string[]>;
@@ -115,8 +117,8 @@ export async function createRealtimeServer(input: {
     await socket.join(conversationRooms);
     const presenceVisibility = input.loadPresenceVisibility
       ? await input.loadPresenceVisibility(auth.userId)
-      : (await UserModel.findById(auth.userId).select({ presenceVisibility: 1 }).lean())
-          ?.presenceVisibility ?? 'everyone';
+      : ((await UserModel.findById(auth.userId).select({ presenceVisibility: 1 }).lean())
+          ?.presenceVisibility ?? 'everyone');
     const shouldPublishPresence = presenceVisibility !== 'nobody';
     const becameOnline = await addPresence(auth.userId, socket.id);
     if (becameOnline && shouldPublishPresence)
@@ -139,13 +141,22 @@ export async function createRealtimeServer(input: {
           isTyping: false,
           expiresAt: new Date().toISOString(),
         });
-      void removePresence(auth.userId, socket.id).then(async (becameOffline) => {
-        if (!becameOffline) return;
-        const lastSeenAt = new Date();
-        await UserModel.updateOne({ _id: auth.userId }, { $set: { lastSeenAt } });
-        if (shouldPublishPresence)
-          await publishVisiblePresence(auth.userId, 'offline', presenceVisibility, lastSeenAt.toISOString());
-      }).catch((error: unknown) => input.logger.warn({ error }, 'Presence disconnect update failed'));
+      void removePresence(auth.userId, socket.id)
+        .then(async (becameOffline) => {
+          if (!becameOffline) return;
+          const lastSeenAt = new Date();
+          await UserModel.updateOne({ _id: auth.userId }, { $set: { lastSeenAt } });
+          if (shouldPublishPresence)
+            await publishVisiblePresence(
+              auth.userId,
+              'offline',
+              presenceVisibility,
+              lastSeenAt.toISOString(),
+            );
+        })
+        .catch((error: unknown) =>
+          input.logger.warn({ error }, 'Presence disconnect update failed'),
+        );
     });
 
     socket.on('presence:get', (payload: unknown, acknowledge: Ack) => {
@@ -155,16 +166,21 @@ export async function createRealtimeServer(input: {
           const visibility = await visibilityFor(userId);
           const permitted = await canSeePresence(auth.userId, userId, visibility);
           const online = permitted && (await isOnline(userId));
-          const lastSeen = permitted && !online
-            ? await UserModel.findById(userId).select({ lastSeenAt: 1 }).lean()
-            : null;
-          acknowledge({ ok: true, data: {
-            userId,
-            status: !permitted ? 'unknown' : online ? 'online' : 'offline',
-            updatedAt: new Date().toISOString(),
-            ...(permitted && !online && lastSeen?.lastSeenAt
-              ? { lastSeenAt: lastSeen.lastSeenAt.toISOString() } : {}),
-          } });
+          const lastSeen =
+            permitted && !online
+              ? await UserModel.findById(userId).select({ lastSeenAt: 1 }).lean()
+              : null;
+          acknowledge({
+            ok: true,
+            data: {
+              userId,
+              status: !permitted ? 'unknown' : online ? 'online' : 'offline',
+              updatedAt: new Date().toISOString(),
+              ...(permitted && !online && lastSeen?.lastSeenAt
+                ? { lastSeenAt: lastSeen.lastSeenAt.toISOString() }
+                : {}),
+            },
+          });
         } catch {
           acknowledge(rejected('PRESENCE_LOOKUP_REJECTED', socket.id));
         }
@@ -177,7 +193,7 @@ export async function createRealtimeServer(input: {
           // Read the saved preference from MongoDB; never trust a client-supplied visibility.
           const current = await visibilityFor(auth.userId);
           await publishVisiblePresence(auth.userId, 'unknown', current);
-          if (current !== 'nobody' && await isOnline(auth.userId))
+          if (current !== 'nobody' && (await isOnline(auth.userId)))
             await publishVisiblePresence(auth.userId, 'online', current);
           acknowledge({ ok: true, data: { updated: true } });
         } catch {
@@ -228,10 +244,11 @@ export async function createRealtimeServer(input: {
             ).map((member) => String(member.userId));
         for (const recipientId of recipientIds)
           io.in(`user:${recipientId}`).socketsJoin(`conversation:${value.conversationId}`);
-        io.to([
-          `conversation:${value.conversationId}`,
-          ...recipientIds.map((userId) => `user:${userId}`),
-        ]).emit('message:created', message);
+        if (!input.enableOutbox)
+          io.to([
+            `conversation:${value.conversationId}`,
+            ...recipientIds.map((userId) => `user:${userId}`),
+          ]).emit('message:created', message);
         acknowledge({ ok: true, data: message });
       } catch (error) {
         input.logger.warn(
@@ -264,7 +281,8 @@ export async function createRealtimeServer(input: {
       try {
         const value = messageIdSchema.parse(payload);
         const message = await input.messages.deleteForEveryone(authContext.userId, value.messageId);
-        io.to(`conversation:${message.conversationId}`).emit('message:deletedEveryone', message);
+        if (!input.enableOutbox)
+          io.to(`conversation:${message.conversationId}`).emit('message:deletedEveryone', message);
         acknowledge({ ok: true, data: message });
       } catch {
         acknowledge(rejected('MESSAGE_DELETE_REJECTED', socket.id));
@@ -280,7 +298,8 @@ export async function createRealtimeServer(input: {
           value.emoji,
           value.active,
         );
-        io.to(`conversation:${reaction.conversationId}`).emit('reaction:changed', reaction);
+        if (!input.enableOutbox)
+          io.to(`conversation:${reaction.conversationId}`).emit('reaction:changed', reaction);
         acknowledge({ ok: true, data: reaction });
       } catch {
         acknowledge(rejected('REACTION_REJECTED', socket.id));
@@ -354,17 +373,24 @@ export async function createRealtimeServer(input: {
     return user?.presenceVisibility ?? 'nobody';
   }
 
-  async function canSeePresence(viewerId: string, targetId: string, visibility: string): Promise<boolean> {
+  async function canSeePresence(
+    viewerId: string,
+    targetId: string,
+    visibility: string,
+  ): Promise<boolean> {
     if (viewerId === targetId) return true;
     if (visibility === 'nobody') return false;
     if (visibility === 'everyone') return true;
     const targetConversations = await ConversationMemberModel.find({ userId: targetId })
-      .select({ conversationId: 1 }).lean();
+      .select({ conversationId: 1 })
+      .lean();
     if (targetConversations.length === 0) return false;
-    return Boolean(await ConversationMemberModel.exists({
-      userId: viewerId,
-      conversationId: { $in: targetConversations.map((member) => member.conversationId) },
-    }));
+    return Boolean(
+      await ConversationMemberModel.exists({
+        userId: viewerId,
+        conversationId: { $in: targetConversations.map((member) => member.conversationId) },
+      }),
+    );
   }
 
   async function isOnline(userId: string): Promise<boolean> {
@@ -382,12 +408,16 @@ export async function createRealtimeServer(input: {
     visibility: 'everyone' | 'contacts' | 'nobody',
     lastSeenAt?: string,
   ): Promise<void> {
-    const members = await ConversationMemberModel.find({ userId }).select({ conversationId: 1 }).lean();
+    const members = await ConversationMemberModel.find({ userId })
+      .select({ conversationId: 1 })
+      .lean();
     if (members.length === 0) return;
     const peers = await ConversationMemberModel.find({
       conversationId: { $in: members.map((member) => member.conversationId) },
       userId: { $ne: userId },
-    }).select({ userId: 1 }).lean();
+    })
+      .select({ userId: 1 })
+      .lean();
     const peerIds = new Set(peers.map((member) => String(member.userId)));
     const updatedAt = new Date().toISOString();
     for (const peerId of peerIds) {
@@ -441,8 +471,16 @@ export async function createRealtimeServer(input: {
     return false;
   }
 
+  const outbox =
+    input.enableOutbox === true
+      ? startRealtimeOutbox((userIds, name, payload) => {
+          io.to(userIds.map((id) => `user:${id}`)).emit(name, payload);
+        }, input.logger)
+      : undefined;
+
   return {
     async disconnect() {
+      await outbox?.disconnect();
       await io.close();
       await Promise.allSettled([
         ...(publisher ? [publisher.quit()] : []),

@@ -16,6 +16,10 @@ const redactPaths = [
   'refreshToken',
   'resetToken',
   'pushToken',
+  'fcmToken',
+  'req.body.fcmToken',
+  'privateKey',
+  'firebase.privateKey',
 ];
 
 export function createLogger(config: Pick<ApiConfig, 'logLevel' | 'nodeEnv'>): Logger {

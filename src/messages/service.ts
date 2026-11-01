@@ -416,7 +416,7 @@ async function requireMembership(actorId: string, conversationId: string): Promi
     });
 }
 
-function mapMessage(
+export function mapMessage(
   value: MessageDocumentLike,
   reactions: readonly ReactionSummary[] = [],
 ): MessageView {

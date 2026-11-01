@@ -1,3 +1,4 @@
+import { createPrivateKey } from 'node:crypto';
 import { z } from 'zod';
 
 const commaSeparatedOriginsSchema = z
@@ -55,7 +56,15 @@ const featureFlagSchema = z
 const environmentSchema = z
   .object({
     ACCESS_TOKEN_AUDIENCE: z.string().min(1).max(200),
-    ADMIN_EMAILS: z.string().default('').transform((value) => value.split(',').map((email) => email.trim().toLowerCase()).filter(Boolean)),
+    ADMIN_EMAILS: z
+      .string()
+      .default('')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((email) => email.trim().toLowerCase())
+          .filter(Boolean),
+      ),
     ACCESS_TOKEN_ISSUER: z.string().min(1).max(200),
     ACCESS_TOKEN_PRIVATE_KEY_BASE64: z.string().min(1),
     ACCESS_TOKEN_PUBLIC_KEY_BASE64: z.string().min(1),
@@ -96,6 +105,21 @@ const environmentSchema = z
     PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(60).default(15),
     SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(10_000),
     TRUST_PROXY: z.enum(['false', 'loopback']).default('false'),
+    FIREBASE_PROJECT_ID: z.string().min(1),
+    FIREBASE_CLIENT_EMAIL: z.string().email(),
+    FIREBASE_PRIVATE_KEY_BASE64: z
+      .string()
+      .min(1)
+      .superRefine((value, context) => {
+        try {
+          if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value) || value.length % 4 !== 0) throw new Error();
+          const pem = Buffer.from(value, 'base64').toString('utf8');
+          if (!/^-----BEGIN (?:RSA )?PRIVATE KEY-----/.test(pem.trim())) throw new Error();
+          if (createPrivateKey(pem).asymmetricKeyType !== 'rsa') throw new Error();
+        } catch {
+          context.addIssue({ code: 'custom', message: 'Must encode a valid RSA PEM private key.' });
+        }
+      }),
   })
   .superRefine((value, context) => {
     if (value.REGISTRATION_OTP_ENABLED || value.PASSWORD_RESET_ENABLED) {
@@ -144,6 +168,11 @@ export type ApiConfig = Readonly<{
   passwordResetTtlMinutes: number;
   shutdownTimeoutMs: number;
   trustProxy: false | 'loopback';
+  firebase: Readonly<{
+    projectId: string;
+    clientEmail: string;
+    privateKey: string;
+  }>;
 }>;
 
 export class EnvironmentValidationError extends Error {
@@ -213,5 +242,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ApiCon
     passwordResetTtlMinutes: result.data.PASSWORD_RESET_TTL_MINUTES,
     shutdownTimeoutMs: result.data.SHUTDOWN_TIMEOUT_MS,
     trustProxy: result.data.TRUST_PROXY === 'loopback' ? 'loopback' : false,
+    firebase: Object.freeze({
+      projectId: result.data.FIREBASE_PROJECT_ID,
+      clientEmail: result.data.FIREBASE_CLIENT_EMAIL,
+      privateKey: Buffer.from(result.data.FIREBASE_PRIVATE_KEY_BASE64, 'base64').toString('utf8'),
+    }),
   });
 }

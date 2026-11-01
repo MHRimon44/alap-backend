@@ -1,3 +1,7 @@
+import { DeviceService } from './devices/service.js';
+import { initializeFirebase, firebaseMessaging } from './notifications/firebase.js';
+import { NotificationService } from './notifications/service.js';
+import { startPushWorker } from './notifications/outbox.js';
 import { createServer, type Server } from 'node:http';
 
 import type { Logger } from 'pino';
@@ -36,6 +40,7 @@ function listen(server: Server, port: number): Promise<void> {
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  initializeFirebase(config.firebase);
   const logger: Logger = createLogger(config);
   const mongo = createMongoConnection(config, logger);
   const redis = createRedisConnection(config, logger);
@@ -79,11 +84,40 @@ async function main(): Promise<void> {
   );
   const messages = createMessageService(() => new Date(), rateLimiter);
   const admin = createAdminService(config.adminEmails, passwordHasher);
-  const app = createApp({ admin, auth, config, conversations, logger, messages, readiness, users });
+  const devices = new DeviceService();
+  const notifications = new NotificationService(firebaseMessaging(), devices, logger);
+  const app = createApp({
+    devices,
+    notifications,
+    admin,
+    auth,
+    config,
+    conversations,
+    logger,
+    messages,
+    readiness,
+    users,
+  });
   const server = createServer(app);
-  const realtime = await createRealtimeServer({ auth, config, logger, messages, server });
+  const realtime = await createRealtimeServer({
+    enableOutbox: true,
+    auth,
+    config,
+    logger,
+    messages,
+    server,
+  });
+  const pushWorker = startPushWorker(notifications, logger);
   const shutdown = createShutdownHandler({
-    connections: [realtime, mongo, redis],
+    connections: [
+      {
+        async disconnect() {
+          await pushWorker.disconnect();
+          await realtime.disconnect();
+          await Promise.all([mongo.disconnect(), redis.disconnect()]);
+        },
+      },
+    ],
     logger,
     server,
     timeoutMs: config.shutdownTimeoutMs,

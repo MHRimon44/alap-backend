@@ -42,6 +42,12 @@ export interface OutboxEventDocument {
   aggregateId: Types.ObjectId;
   conversationId: Types.ObjectId;
   payload: Record<string, unknown>;
+  pushProcessedAt?: Date;
+  pushLockedAt?: Date;
+  pushLockOwner?: string;
+  pushAvailableAt?: Date;
+  pushAttempts?: number;
+  pushDeliveredUserIds?: string[];
   attempts: number;
   availableAt: Date;
   lockedAt?: Date;
@@ -101,6 +107,12 @@ const outboxSchema = new Schema<OutboxEventDocument>(
     aggregateId: { type: Schema.Types.ObjectId, required: true },
     conversationId: { type: Schema.Types.ObjectId, required: true },
     payload: { type: Schema.Types.Mixed, required: true },
+    pushProcessedAt: Date,
+    pushLockedAt: Date,
+    pushLockOwner: String,
+    pushAvailableAt: Date,
+    pushAttempts: Number,
+    pushDeliveredUserIds: [String],
     attempts: { type: Number, default: 0, required: true },
     availableAt: { type: Date, default: Date.now, required: true },
     lockedAt: Date,
@@ -109,6 +121,7 @@ const outboxSchema = new Schema<OutboxEventDocument>(
   },
   { timestamps: { createdAt: true, updatedAt: false }, versionKey: false },
 );
+outboxSchema.index({ type: 1, pushProcessedAt: 1, pushAvailableAt: 1 });
 outboxSchema.index({ conversationId: 1, _id: 1 });
 outboxSchema.index({ processedAt: 1, availableAt: 1, _id: 1 });
 

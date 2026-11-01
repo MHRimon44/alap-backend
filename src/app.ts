@@ -19,6 +19,10 @@ import type { MessageService } from './messages/service.js';
 import { mountSwagger } from './swagger.js';
 import { createAdminRouter } from './admin/routes.js';
 import type { AdminService } from './admin/service.js';
+import { createDeviceRouter } from './devices/routes.js';
+import type { DeviceService } from './devices/service.js';
+import type { NotificationService } from './notifications/service.js';
+import { createNotificationRouter } from './notifications/routes.js';
 
 export type AppDependencies = Readonly<{
   admin?: AdminService;
@@ -29,6 +33,8 @@ export type AppDependencies = Readonly<{
   messages?: MessageService;
   readiness: ReadinessProbe;
   users?: UserService;
+  devices?: DeviceService;
+  notifications?: NotificationService;
 }>;
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -49,7 +55,11 @@ export function createApp(dependencies: AppDependencies): Express {
   app.use(express.urlencoded({ extended: false, limit: dependencies.config.bodyLimit }));
 
   app.use('/v1/health', createHealthRouter(dependencies.readiness));
-  if (dependencies.auth && dependencies.admin) app.use('/v1/admin', createAdminRouter(dependencies.auth, dependencies.admin, dependencies.readiness));
+  if (dependencies.auth && dependencies.admin)
+    app.use(
+      '/v1/admin',
+      createAdminRouter(dependencies.auth, dependencies.admin, dependencies.readiness),
+    );
   if (dependencies.auth)
     app.use('/v1/auth', createAuthRouter(dependencies.auth, dependencies.config));
   if (dependencies.auth && dependencies.users)
@@ -66,6 +76,17 @@ export function createApp(dependencies: AppDependencies): Express {
     app.use('/v1/conversations/:conversationId/receipts', messageRouters.conversationReceipts);
     app.use('/v1/messages', messageRouters.messages);
   }
+  if (dependencies.auth && dependencies.devices)
+    app.use('/v1/devices', createDeviceRouter(dependencies.auth, dependencies.devices));
+  if (
+    dependencies.auth &&
+    dependencies.notifications &&
+    dependencies.config.nodeEnv !== 'production'
+  )
+    app.use(
+      '/v1/notifications',
+      createNotificationRouter(dependencies.auth, dependencies.notifications),
+    );
   mountSwagger(app, dependencies.config.nodeEnv, dependencies.config);
   app.use(notFoundHandler);
   app.use(errorHandler);

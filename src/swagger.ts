@@ -241,6 +241,34 @@ export const openApiDocument = {
   },
 
   paths: {
+    '/devices': {
+      post: operation('Devices', 'Register or refresh this installation', {
+        status: 201,
+        body: object(
+          {
+            deviceId: { ...string, maxLength: 500 },
+            deviceName: { ...string, maxLength: 200 },
+            platform: { type: 'string', enum: ['android', 'ios'] },
+            fcmToken: { ...string, maxLength: 4096 },
+          },
+          ['deviceId', 'deviceName', 'platform', 'fcmToken'],
+        ),
+      }),
+    },
+    '/devices/{deviceId}': {
+      delete: operation('Devices', 'Unregister your installation', {
+        status: 204,
+        parameters: [parameter('deviceId', string, 'path')],
+      }),
+    },
+    '/notifications/test': {
+      post: operation('Notifications', 'Send a test push to your devices (non-production only)', {
+        body: object(
+          { title: { ...string, maxLength: 100 }, body: { ...string, maxLength: 500 } },
+          ['title', 'body'],
+        ),
+      }),
+    },
     '/health/live': {
       get: operation('Health', 'Liveness', {
         public: true,
@@ -760,6 +788,7 @@ export function mountSwagger(
 ): void {
   const document = createOpenApiDocument(features);
   const isProduction = nodeEnv === 'production';
+  if (isProduction) delete document.paths['/notifications/test'];
 
   app.get('/openapi.json', (_request, response) => {
     response.setHeader('Cache-Control', 'no-store');

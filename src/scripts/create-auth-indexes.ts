@@ -1,7 +1,14 @@
+import { DeviceModel } from '../devices/models.js';
 import { loadConfig } from '../config/env.js';
 import { createMongoConnection } from '../infrastructure/mongo.js';
 import { createLogger } from '../logging/logger.js';
-import { PasswordResetModel, PendingRegistrationModel, RefreshTokenModel, SessionModel, UserModel } from '../auth/models.js';
+import {
+  PasswordResetModel,
+  PendingRegistrationModel,
+  RefreshTokenModel,
+  SessionModel,
+  UserModel,
+} from '../auth/models.js';
 import { ConversationMemberModel, ConversationModel } from '../conversations/models.js';
 import {
   MessageModel,
@@ -17,6 +24,7 @@ async function main(): Promise<void> {
   await mongo.connect();
   try {
     await Promise.all([
+      DeviceModel.createIndexes(),
       UserModel.createIndexes(),
       SessionModel.createIndexes(),
       RefreshTokenModel.createIndexes(),

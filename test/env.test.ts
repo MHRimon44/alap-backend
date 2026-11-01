@@ -1,6 +1,16 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { EnvironmentValidationError, loadConfig } from '../src/config/env.js';
 
 const validEnvironment: NodeJS.ProcessEnv = {
+  FIREBASE_PROJECT_ID: 'test-project',
+  FIREBASE_CLIENT_EMAIL: 'test@example.com',
+  FIREBASE_PRIVATE_KEY_BASE64: Buffer.from(
+    generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+    }).privateKey,
+  ).toString('base64'),
   ACCESS_TOKEN_AUDIENCE: 'chat-mobile-test',
   ACCESS_TOKEN_ISSUER: 'chat-api-test',
   ACCESS_TOKEN_PRIVATE_KEY_BASE64: Buffer.from('private-key').toString('base64'),
@@ -135,4 +145,10 @@ describe('temporary auth environment', () => {
       EnvironmentValidationError,
     );
   });
+});
+
+it('rejects malformed Firebase keys without including their value', () => {
+  expect(() =>
+    loadConfig({ ...validEnvironment, FIREBASE_PRIVATE_KEY_BASE64: 'invalid-secret' }),
+  ).toThrow('Must encode a valid RSA PEM private key.');
 });
